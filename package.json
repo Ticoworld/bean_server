@@ -1,0 +1,37 @@
+{
+  "name": "beans-server",
+  "version": "1.0.0",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon index.js"
+  },
+  "dependencies": {
+    "@scure/bip39": "^1.5.4",
+    "@stacks/blockchain-api-client": "^8.4.0",
+    "@stacks/keychain": "^4.3.8",
+    "@stacks/network": "^7.0.2",
+    "@stacks/transactions": "^7.0.4",
+    "@stacks/wallet-sdk": "^7.0.2",
+    "axios": "^1.8.1",
+    "bip39": "^3.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5",
+    "node-telegram-bot-api": "^0.66.0",
+    "nodemon": "^3.1.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ticoworld/beans-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ticoworld/beans-server/issues"
+  },
+  "homepage": "https://github.com/Ticoworld/beans-server#readme",
+  "description": ""
+}
