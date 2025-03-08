@@ -41,6 +41,18 @@ mongoose.connect(process.env.MONGO_URI)
 // const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 
+app.post("/webhook", (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+  console.log('helloworld');
+});
+
+app.get("/", (req, res) => {
+  res.send("Server is running");
+});
+
+
+
 function encryptPrivateKey(privateKey, pin) {
   // Derive a key by combining the PIN and the PRIVATE_KEY_SECRET
   const combinedKey = crypto.createHash('sha256').update(pin + PRIVATE_KEY_SECRET).digest();
