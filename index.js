@@ -44,7 +44,6 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 app.post("/webhook", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
-  console.log('helloworld');
 });
 
 app.get("/", (req, res) => {
@@ -629,7 +628,7 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
           throw new Error("Transaction creation failed");
         }
 
-        console.log("Transaction Object:", transaction);
+        // console.log("Transaction Object:", transaction);
 
         const result = await broadcastTransaction({ transaction, network });
         if (result.error) {
