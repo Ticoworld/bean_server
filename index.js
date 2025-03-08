@@ -340,13 +340,14 @@ bot.onText(/\/help/, (msg) => {
   const helpMessage = `
   📘 *Available Commands:*
   
-  /start - Create a new wallet or restore an existing wallet  
-  /help - Show this help message  
-  /balance - Check your wallet balance  
-  /tip <amount> <address> - Send STX tokens to a specific address  
-  /receive - Get your wallet address  
-  /resetwallet - Reset your wallet (requires PIN)  
-  /recover - Recover your wallet if you lost your PIN (requires seed phrase)  
+/start - Create a new wallet or restore an existing wallet  
+/help - Show this help message  
+/balance - Check your wallet balance  
+/tip <amount> \\[stx\] - Tip the user you're replying to in groups (Beans by default, STX if "stx" is specified)  
+/tip @username <amount> \\[stx\] - Tip a specific user by username (Beans by default, STX if "stx" is specified)  
+/receive - Get your wallet address  
+/resetwallet - Reset your wallet (requires PIN)  
+/recover - Recover your wallet if you lost your PIN (requires seed phrase)
   `;
   bot.sendMessage(chatId, helpMessage, { parse_mode: "Markdown" });
 });
@@ -487,7 +488,7 @@ async function getNonce(address) {
 
 // Inside your /tip command
 bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match) => {
-  const groupChatId = msg.chat.id;
+  const chatId = msg.chat.id;
   const tipperTelegramId = String(msg.from.id);
   const optionalUsername = match[1];
   const tipAmount = parseFloat(match[2]);
@@ -500,13 +501,13 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
   try {
     // Validate tip amount
     if (isNaN(tipAmount) || tipAmount <= 0) {
-      return bot.sendMessage(groupChatId, "❌ Invalid tip amount provided.");
+      return bot.sendMessage(chatId, "❌ Invalid tip amount provided.");
     }
 
     // Look up the tipper
     const tipper = await User.findOne({ telegramId: tipperTelegramId });
     if (!tipper) {
-      return bot.sendMessage(groupChatId, "❌ You are not registered. Use /start to register.");
+      return bot.sendMessage(chatId, "❌ You are not registered. Use /start to register.");
     }
 
     // Determine the recipient
@@ -515,26 +516,29 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
       const recipientTelegramId = String(msg.reply_to_message.from.id);
       recipient = await User.findOne({ telegramId: recipientTelegramId });
       if (!recipient) {
-        return bot.sendMessage(groupChatId, "❌ The recipient is not registered.");
+        return bot.sendMessage(chatId, "❌ The recipient is not registered.");
       }
     } else if (optionalUsername) {
       const username = optionalUsername.replace('@', '');
       recipient = await User.findOne({ username });
       if (!recipient) {
-        return bot.sendMessage(groupChatId, `❌ @${username} is not registered.`);
+        return bot.sendMessage(chatId, `❌ @${username} is not registered.`);
       }
     } else {
-      return bot.sendMessage(groupChatId, "❌ Please reply to a user's message or specify @username.");
+      return bot.sendMessage(chatId, "❌ Please reply to a user's message or specify @username.");
     }
 
-    // Notify the group (replying to the original tip message) to check their DM
-    await bot.sendMessage(
-      groupChatId,
-      `@${msg.from.username || tipperTelegramId}, check your DMs to confirm your ${tipType} tip.`,
-      { reply_to_message_id: msg.message_id }
-    );
+    // If the command is NOT in a private DM, notify the tipper to check their DMs.
+    if (msg.chat.type !== 'private') {
+      await bot.sendMessage(
+        chatId,
+        `@${msg.from.username || tipperTelegramId}, check your DMs to confirm your ${tipType} tip.`,
+        { reply_to_message_id: msg.message_id }
+      );
+    }
 
-    // Send a DM to the tipper prompting for their 5-digit PIN
+    // Send a DM to the tipper prompting for their 5-digit PIN.
+    // (This prompt is sent regardless, but in private DM the user already sees it.)
     const dmMsg = await bot.sendMessage(
       tipperTelegramId,
       `You are tipping ${tipAmount} ${tipType} to @${recipient.username || recipient.telegramId}.\n` +
@@ -628,8 +632,6 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
           throw new Error("Transaction creation failed");
         }
 
-        // console.log("Transaction Object:", transaction);
-
         const result = await broadcastTransaction({ transaction, network });
         if (result.error) {
           throw new Error(`Broadcast failed: ${result.error}`);
@@ -637,19 +639,34 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
         const explorerLink = `https://explorer.hiro.so/txid/${result.txid}?chain=mainnet`;
         console.log("Broadcast Result:", result);
 
-        // Notify the tipper in DM
-        await bot.sendMessage(
-          tipperTelegramId,
-          `✅ ${tipAmount} ${tipType} sent successfully!\nTX ID: ${explorerLink}`
-        );
-
-        // Notify the group (replying to the original tip message)
-        await bot.sendMessage(
-          groupChatId,
-          `✅ ${tipAmount} ${tipType} tip from @${msg.from.username || tipperTelegramId} to @${recipient.username || recipient.telegramId}!`,
-          { reply_to_message_id: msg.message_id }
-        );
-
+        // For DM-initiated commands, send the TX link to both tipper and recipient.
+        if (msg.chat.type === 'private') {
+          await bot.sendMessage(
+            tipperTelegramId,
+            `✅ ${tipAmount} ${tipType} sent successfully!\nTX ID: ${explorerLink}`
+          );
+          if (recipient.telegramId) {
+            await bot.sendMessage(
+              recipient.telegramId,
+              `🎉 You have received a tip of ${tipAmount} ${tipType} from @${msg.from.username || tipperTelegramId}.\nTX ID: ${explorerLink}`
+            );
+          }
+        } else {
+          // In group chats, notify the tipper in DM and the group as before.
+          await bot.sendMessage(
+            tipperTelegramId,
+            `✅ ${tipAmount} ${tipType} sent successfully!\nTX ID: ${explorerLink}`
+          );
+          await bot.sendMessage(
+            recipient.telegramId,
+            `🎉 You have received a tip of ${tipAmount} ${tipType} from @${msg.from.username || tipperTelegramId}.\nTX ID: ${explorerLink}`
+          );
+          await bot.sendMessage(
+            chatId,
+            `✅ ${tipAmount} ${tipType} tip from @${msg.from.username || tipperTelegramId} to @${recipient.username || recipient.telegramId}!`,
+            { reply_to_message_id: msg.message_id }
+          );
+        }
       } catch (error) {
         console.error("Tip processing error:", error);
         bot.sendMessage(
@@ -668,9 +685,10 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
 
   } catch (error) {
     console.error("Tip command error:", error);
-    bot.sendMessage(groupChatId, "❌ An error occurred. Please try again.");
+    bot.sendMessage(chatId, "❌ An error occurred. Please try again.");
   }
 });
+
 
 
 // /recover command implementation
