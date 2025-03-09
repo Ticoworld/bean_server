@@ -97,7 +97,7 @@ bot.onText(/\/start/, async (msg) => {
 
   // Check if the command is used in a private message or group
   if (msg.chat.type !== 'private') {
-    return bot.sendMessage(chatId, "🚨 *Please use the start command in a private message (DM) with the bot.*\n\nClick here to start: [Start DM](t.me/Beans_tipbot)", { parse_mode: "Markdown" });
+    return bot.sendMessage(chatId, "🚨 *Please use the start command in a private message (DM) with the bot.*\n\nClick here to start: [Start DM](t.me/StacksTipBot)", { parse_mode: "Markdown" });
   }
 
   try {
@@ -698,7 +698,7 @@ bot.onText(/\/recover/, async (msg) => {
   const isGroupChat = msg.chat.type !== 'private';
 
   if (isGroupChat) {
-    return bot.sendMessage(chatId, "🚨 *Please use the recover command in a private message (DM) with the bot.*\n\nClick here to start: [Start DM](t.me/Beans_tipbot)", { parse_mode: "Markdown" });
+    return bot.sendMessage(chatId, "🚨 *Please use the recover command in a private message (DM) with the bot.*\n\nClick here to start: [Start DM](t.me/StacksTipBot)", { parse_mode: "Markdown" });
   }
 
   try {
