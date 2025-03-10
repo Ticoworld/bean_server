@@ -38,8 +38,8 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('MongoDB Connected'))
   .catch(err => console.error('MongoDB Connection Error:', err));
 
-// const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+// const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
 
 app.post("/webhook", (req, res) => {
   bot.processUpdate(req.body);
@@ -230,38 +230,68 @@ bot.onText(/\/resetwallet/, async (msg) => {
   const chatId = msg.chat.id;
   const telegramId = String(msg.from.id);
 
-  const user = await User.findOne({ telegramId });
-  if (!user || !user.securityCode) {
-    return bot.sendMessage(chatId, "❌ You have no security PIN set. You cannot reset your wallet.");
+  // If the command is issued in a group, instruct the user to check their DM.
+  let targetChatId = chatId;
+  if (msg.chat.type !== 'private') {
+    bot.sendMessage(
+      chatId,
+      `@${msg.from.username || telegramId}, please check your DM for wallet reset instructions.`
+    );
+    targetChatId = telegramId; // Use DM for further interaction.
   }
 
-  // Prompt for the current PIN
-  bot.sendMessage(chatId, "🔐 Enter your 5-digit security PIN to reset your wallet:", {
-    reply_markup: { force_reply: true }
-  }).then((sentMessage) => {
-    bot.onReplyToMessage(chatId, sentMessage.message_id, async (pinMsg) => {
-      const pinMessageId = pinMsg.message_id;
-      const pin = pinMsg.text.trim();
-      const encryptedPin = crypto.createHash("sha256").update(pin).digest("hex");
+  // Check if the user exists.
+  const user = await User.findOne({ telegramId });
+  if (!user) {
+    return bot.sendMessage(targetChatId, "❌ You are not registered. Please use /start to create your wallet.");
+  }
 
-      // Delete the PIN message immediately for security
-      bot.deleteMessage(chatId, pinMessageId).catch(() => { });
+  // Check if the user has a security PIN set.
+  if (!user.securityCode) {
+    return bot.sendMessage(targetChatId, "❌ You have not set a security PIN. You cannot reset your wallet.");
+  }
 
-      if (encryptedPin !== user.securityCode) {
-        return bot.sendMessage(chatId, "❌ Incorrect PIN! Wallet reset denied.");
-      }
+  // Send DM prompt for the current PIN.
+  const dmPrompt = await bot.sendMessage(
+    targetChatId,
+    "🔐 Enter your 5-digit security PIN to reset your wallet:",
+    { reply_markup: { force_reply: true } }
+  );
 
-      // Create a new wallet
-      const newWallet = await createWallet();
-      const words = newWallet.seedPhrase.split(' ');
-      const randomIndexes = generateUniqueIndexes(words.length, 3);
-      const challengeWords = randomIndexes.map(i => words[i]);
+  // Listen for the next message in the DM.
+  bot.once("message", async (pinMsg) => {
+    // Ensure the message is from the correct chat and, if replying, that it refers to our prompt.
+    if (
+      String(pinMsg.chat.id) !== targetChatId.toString() ||
+      (pinMsg.reply_to_message && pinMsg.reply_to_message.message_id !== dmPrompt.message_id)
+    ) {
+      return;
+    }
+    
+    // Immediately delete the PIN message for security.
+    const pinMessageId = pinMsg.message_id;
+    bot.deleteMessage(targetChatId, pinMessageId).catch(() => {});
 
-      // Send the new wallet details (seed phrase) to the user
-      const sentSeedMsg = await bot.sendMessage(chatId, `🚨 *Your wallet has been reset!* 🚨
-            
+    const pin = pinMsg.text.trim();
+    const encryptedPin = crypto.createHash("sha256").update(pin).digest("hex");
+
+    if (encryptedPin !== user.securityCode) {
+      return bot.sendMessage(targetChatId, "❌ Incorrect PIN! Wallet reset denied.");
+    }
+
+    // Create a new wallet.
+    const newWallet = await createWallet();
+    const words = newWallet.seedPhrase.split(' ');
+    const randomIndexes = generateUniqueIndexes(words.length, 3);
+    const challengeWords = randomIndexes.map(i => words[i]);
+
+    // Send the new wallet details (seed phrase) to the user.
+    const sentSeedMsg = await bot.sendMessage(
+      targetChatId,
+      `🚨 *Your wallet has been reset!* 🚨
+      
 🔹 *New Wallet Address:* \`${newWallet.address}\`
-🔹 *New Seed Phrase:* \`${newWallet.seedPhrase}\`
+🔹 *New Seed Phrase:* \`${newWallet.seedPhrase}\` 
 
 ⚠️ *This will NOT be stored! Write it down securely.*
 ✅ *Write it down and store it securely!*
@@ -270,7 +300,8 @@ bot.onText(/\/resetwallet/, async (msg) => {
 
 Have you saved your seed phrase?
 1️⃣ Yes, I saved it
-2️⃣ No, I need more time`, {
+2️⃣ No, I need more time`,
+      {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
@@ -278,78 +309,102 @@ Have you saved your seed phrase?
             [{ text: "❌ No", callback_data: `seed_not_saved_${telegramId}` }]
           ]
         }
-      });
+      }
+    );
 
-      // Auto-delete the seed phrase message after 15 minutes
-      setTimeout(() => {
-        bot.deleteMessage(chatId, sentSeedMsg.message_id).catch(() => { });
-      }, 900000);
+    // Auto-delete the seed phrase message after 15 minutes.
+    setTimeout(() => {
+      bot.deleteMessage(targetChatId, sentSeedMsg.message_id).catch(() => {});
+    }, 900000);
 
-      bot.once("callback_query", async (callbackQuery) => {
-        if (!callbackQuery.data.includes(`_${telegramId}`)) return;
+    // Listen for the callback query for seed phrase confirmation.
+    bot.once("callback_query", async (callbackQuery) => {
+      if (!callbackQuery.data.includes(`_${telegramId}`)) return;
 
-        if (callbackQuery.data.startsWith("seed_saved")) {
-          // Delete the seed phrase message immediately upon confirmation
-          bot.deleteMessage(chatId, sentSeedMsg.message_id).catch(() => { });
+      if (callbackQuery.data.startsWith("seed_saved")) {
+        // Delete the seed phrase message immediately upon confirmation.
+        bot.deleteMessage(targetChatId, sentSeedMsg.message_id).catch(() => {});
 
-          // Ask the user to verify their seed phrase by entering 3 words
-          bot.sendMessage(chatId, `📌 *Verify your seed phrase:*
+        // Ask the user to verify their seed phrase by entering 3 words.
+        bot.sendMessage(
+          targetChatId,
+          `📌 *Verify your seed phrase:*
 
 Please enter the following words from your seed phrase:
 - Word #${randomIndexes[0] + 1}
 - Word #${randomIndexes[1] + 1}
 - Word #${randomIndexes[2] + 1}
 
-*(Reply in order, separated by spaces)*`, { parse_mode: "Markdown" });
+*(Reply in order, separated by spaces)*`,
+          { parse_mode: "Markdown" }
+        );
 
-          bot.once("message", async (response) => {
-            const userResponse = response.text.trim().split(" ");
-            if (
-              userResponse.length === 3 &&
-              userResponse[0] === challengeWords[0] &&
-              userResponse[1] === challengeWords[1] &&
-              userResponse[2] === challengeWords[2]
-            ) {
-              // Encrypt the new wallet's private key using the provided PIN
-              const encryptedPrivateKey = encryptPrivateKey(newWallet.privateKey, pin);
+        // Listen for the seed phrase verification response.
+        bot.once("message", async (response) => {
+          const userResponse = response.text.trim().split(" ");
+          if (
+            userResponse.length === 3 &&
+            userResponse[0] === challengeWords[0] &&
+            userResponse[1] === challengeWords[1] &&
+            userResponse[2] === challengeWords[2]
+          ) {
+            // Encrypt the new wallet's private key using the provided PIN.
+            const encryptedPrivateKey = encryptPrivateKey(newWallet.privateKey, pin);
 
-              // Update the user record with the new wallet details
-              user.walletAddress = newWallet.address;
-              user.encryptedPrivateKey = encryptedPrivateKey;
-              await user.save();
+            // Update the user record with the new wallet details.
+            user.walletAddress = newWallet.address;
+            user.encryptedPrivateKey = encryptedPrivateKey;
+            await user.save();
 
-              bot.sendMessage(chatId, "✅ *Seed phrase verified! Your wallet reset is complete.*", { parse_mode: "Markdown" });
-            } else {
-              bot.sendMessage(chatId, "❌ *Incorrect seed phrase verification!* Wallet reset failed. Try again with /resetwallet.");
-            }
-          });
-        } else if (callbackQuery.data.startsWith("seed_not_saved")) {
-          bot.sendMessage(chatId, "⚠️ *Please take your time and save your seed phrase securely.*\nUse /resetwallet again when you're ready.");
-        }
-      });
+            bot.sendMessage(targetChatId, "✅ *Seed phrase verified! Your wallet reset is complete.*", { parse_mode: "Markdown" });
+          } else {
+            bot.sendMessage(targetChatId, "❌ *Incorrect seed phrase verification!* Wallet reset failed. Try again with /resetwallet.");
+          }
+        });
+      } else if (callbackQuery.data.startsWith("seed_not_saved")) {
+        bot.sendMessage(targetChatId, "⚠️ *Please take your time and save your seed phrase securely.*\nUse /resetwallet again when you're ready.");
+      }
     });
-  }).catch((err) => {
-    console.error("Error in /resetwallet:", err);
-    bot.sendMessage(chatId, "❌ An error occurred while processing your wallet reset. Please try again later.");
   });
 });
+
+
 
 // Help Command
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
-  const helpMessage = `
-  📘 *Available Commands:*
-  
+  // If the command is used in a group chat, instruct user to contact in DM.
+  if (msg.chat.type !== "private") {
+    bot.sendMessage(
+      chatId,
+      "🚨 *Help command only available in DM.*\nPlease contact me in DM for help by clicking the button below:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "Contact me for help", url: "https://t.me/StacksTipBot?start=help" }
+            ]
+          ]
+        },
+      }
+    );
+  } else {
+    // In DM, show the full help message with available commands.
+    const helpMessage = `
+📘 *Available Commands:*
+
 /start - Create a new wallet or restore an existing wallet  
 /help - Show this help message  
 /balance - Check your wallet balance  
-/tip <amount> \\[stx\] - Tip the user you're replying to in groups (Beans by default, STX if "stx" is specified)  
-/tip @username <amount> \\[stx\] - Tip a specific user by username (Beans by default, STX if "stx" is specified)  
+/tip <amount> \\[stx\\] - Tip the user you're replying to in groups (Beans by default, STX if "stx" is specified)  
+/tip @username <amount> \\[stx\\] - Tip a specific user by username (Beans by default, STX if "stx" is specified)  
 /receive - Get your wallet address  
 /resetwallet - Reset your wallet (requires PIN)  
 /recover - Recover your wallet if you lost your PIN (requires seed phrase)
-  `;
-  bot.sendMessage(chatId, helpMessage, { parse_mode: "Markdown" });
+    `;
+    bot.sendMessage(chatId, helpMessage, { parse_mode: "Markdown" });
+  }
 });
 
 
@@ -487,12 +542,12 @@ async function getNonce(address) {
 
 
 // Inside your /tip command
-bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match) => {
+bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/i, async (msg, match) => {
   const chatId = msg.chat.id;
   const tipperTelegramId = String(msg.from.id);
   const optionalUsername = match[1];
   const tipAmount = parseFloat(match[2]);
-  const isStxTip = match[4] === 'stx';
+  const isStxTip = match[4] && match[4].toLowerCase() === 'stx';
   const tipType = isStxTip ? 'STX' : 'Beans';
 
   // Declare timeout in this scope
@@ -500,7 +555,7 @@ bot.onText(/\/tip(?:\s+(@\S+))?\s+(\d+(\.\d+)?)(?:\s+(stx))?/, async (msg, match
 
   try {
     // Validate tip amount
-    if (isNaN(tipAmount) || tipAmount <= 0) {
+    if (isNaN(tipAmount) || tipAmount <= 0) { 
       return bot.sendMessage(chatId, "❌ Invalid tip amount provided.");
     }
 
